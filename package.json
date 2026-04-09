@@ -1,0 +1,27 @@
+{
+  "name": "ai-voice-call-agent",
+  "version": "1.0.0",
+  "description": "Production-ready AI Voice Call Agent with Telnyx, Deepgram STT, and Groq intent classification",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "migrate": "node scripts/migrate.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "axios": "^1.7.0",
+    "@deepgram/sdk": "^3.9.0",
+    "openai": "^4.70.0",
+    "ioredis": "^5.4.0",
+    "pg": "^8.13.0",
+    "ws": "^8.18.0",
+    "dotenv": "^16.4.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
