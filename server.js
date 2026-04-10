@@ -2,9 +2,6 @@ import express from 'express';
 import http from 'http';
 import config from './src/config/index.js';
 import { createLogger } from './src/utils/log.js';
-import routes from './src/routes/webhook.js';
-import { initAudioBridge } from './src/services/audioBridge.js';
-import { initCallHandler } from './src/handlers/callHandler.js';
 import { testConnection as testRedis } from './src/services/redis.js';
 import { testConnection as testDb } from './src/config/database.js';
 
@@ -15,8 +12,11 @@ const log = createLogger('server');
 // ============================================
 const app = express();
 
-// Parse JSON bodies
+// Parse JSON bodies (for Telnyx webhooks)
 app.use(express.json());
+
+// Parse URL-encoded bodies (for Twilio webhooks)
+app.use(express.urlencoded({ extended: true }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -26,19 +26,33 @@ app.use((req, res, next) => {
   next();
 });
 
-// Mount routes
-app.use('/', routes);
+// ============================================
+// Mount Routes Based on Provider
+// ============================================
+async function mountRoutes() {
+  if (config.provider === 'twilio') {
+    const twilioRoutes = (await import('./src/providers/twilio/routes.js')).default;
+    app.use('/', twilioRoutes);
+    log.info('📱 Twilio routes mounted');
+  } else {
+    // Default: Telnyx
+    const telnyxRoutes = (await import('./src/routes/webhook.js')).default;
+    app.use('/', telnyxRoutes);
+    log.info('📡 Telnyx routes mounted');
+  }
+}
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
+// 404 handler (mounted after routes)
+function mount404() {
+  app.use((req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
 
-// Error handler
-app.use((err, req, res, next) => {
-  log.error({ err }, 'Unhandled express error');
-  res.status(500).json({ error: 'Internal server error' });
-});
+  app.use((err, req, res, next) => {
+    log.error({ err }, 'Unhandled express error');
+    res.status(500).json({ error: 'Internal server error' });
+  });
+}
 
 // ============================================
 // Start Server
@@ -47,7 +61,11 @@ async function start() {
   log.info('='.repeat(50));
   log.info('🚀 AI Voice Call Agent — Starting...');
   log.info('='.repeat(50));
-  log.info({ company: config.companyName, transferNumber: config.transferNumber });
+  log.info({
+    provider: config.provider.toUpperCase(),
+    company: config.companyName,
+    transferNumber: config.transferNumber,
+  });
 
   // Test connections
   const redisOk = await testRedis();
@@ -62,29 +80,51 @@ async function start() {
     log.warn('⚠️  PostgreSQL connection failed — logging will be disabled');
   }
 
+  // Mount provider-specific routes
+  await mountRoutes();
+  mount404();
+
   // Create HTTP server
   const server = http.createServer(app);
 
-  // Initialize WebSocket audio bridge on the same server
-  initAudioBridge(server);
-
-  // Initialize call handler (registers audio bridge callbacks)
-  initCallHandler();
+  // Provider-specific initialization
+  if (config.provider === 'telnyx') {
+    const { initAudioBridge } = await import('./src/services/audioBridge.js');
+    const { initCallHandler } = await import('./src/handlers/callHandler.js');
+    initAudioBridge(server);
+    initCallHandler();
+  }
 
   // Start listening
   server.listen(config.port, () => {
     log.info('='.repeat(50));
     log.info(`✅ Server running on port ${config.port}`);
-    log.info(`📡 Webhook URL:  http://localhost:${config.port}/webhook`);
-    log.info(`🔊 Audio WS:     ws://localhost:${config.port}${config.wsPath}`);
+    log.info(`🔌 Provider:     ${config.provider.toUpperCase()}`);
+
+    if (config.provider === 'twilio') {
+      log.info(`📞 Voice URL:    http://localhost:${config.port}/voice`);
+      log.info(`📥 Response:     http://localhost:${config.port}/handle-response`);
+      log.info(`📊 Status:       http://localhost:${config.port}/status`);
+    } else {
+      log.info(`📡 Webhook URL:  http://localhost:${config.port}/webhook`);
+      log.info(`🔊 Audio WS:     ws://localhost:${config.port}${config.wsPath}`);
+    }
+
     log.info(`❤️  Health:       http://localhost:${config.port}/health`);
     log.info(`📞 Outbound:     POST http://localhost:${config.port}/calls/outbound`);
     log.info('='.repeat(50));
     log.info('');
     log.info('👉 Next steps:');
     log.info('   1. Run ngrok:  ngrok http ' + config.port);
-    log.info('   2. Set STREAM_URL in .env to:  wss://<ngrok-url>/audio');
-    log.info('   3. Set Telnyx webhook URL to:   https://<ngrok-url>/webhook');
+
+    if (config.provider === 'twilio') {
+      log.info('   2. Set PUBLIC_URL in .env to:  https://<ngrok-url>');
+      log.info('   3. Set Twilio webhook (Voice URL) to: https://<ngrok-url>/voice');
+      log.info('   4. Set Twilio status callback to:     https://<ngrok-url>/status');
+    } else {
+      log.info('   2. Set STREAM_URL in .env to:  wss://<ngrok-url>/audio');
+      log.info('   3. Set Telnyx webhook URL to:   https://<ngrok-url>/webhook');
+    }
     log.info('');
   });
 
@@ -116,7 +156,6 @@ async function start() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  // Uncaught errors
   process.on('uncaughtException', (err) => {
     log.fatal({ err }, 'Uncaught exception');
     process.exit(1);
