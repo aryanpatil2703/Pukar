@@ -35,6 +35,62 @@ A **production-ready AI Voice Call Agent** that handles real-time phone calls vi
 
 ---
 
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    A[📞 Telnyx Cloud] -->|Webhook Events| B[Express Server :3000]
+    A -->|Audio Stream| C[WebSocket Server :4000]
+    
+    B --> D[Call Handler<br/>State Machine]
+    D --> E[Redis<br/>call:id → state]
+    
+    D -->|speak / transfer / hangup| F[Call Control<br/>Telnyx SDK]
+    F --> A
+    
+    C --> G[Audio Bridge]
+    G --> H[Deepgram STT<br/>Real-time]
+    H -->|transcript| D
+    
+    D -->|text| I{Rule-based<br/>Match?}
+    I -->|yes| J[Decision Engine]
+    I -->|no| K[Groq LLM<br/>llama-3.1-8b]
+    K --> J
+    
+    J -->|transfer| F
+    J -->|hangup| F
+    
+    D -->|on completion| L[PostgreSQL<br/>call_logs]
+    
+    style A fill:#6c5ce7,color:#fff
+    style E fill:#e17055,color:#fff
+    style H fill:#00b894,color:#fff
+    style K fill:#fdcb6e,color:#000
+    style L fill:#0984e3,color:#fff
+```
+
+## State Machine Diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> INIT: call.initiated
+    INIT --> CALL_ANSWERED: answer()
+    CALL_ANSWERED --> INTRO_PLAYING: speak(intro)
+    INTRO_PLAYING --> INTRO_PLAYED: call.speak.ended
+    INTRO_PLAYED --> LISTENING: startStreaming()
+    LISTENING --> PROCESSING_INTENT: transcript received
+    LISTENING --> PROCESSING_INTENT: timeout (15s)
+    PROCESSING_INTENT --> DECISION_MADE: intent classified
+    DECISION_MADE --> LISTENING: unclear + retries < 1
+    DECISION_MADE --> TRANSFERRING: available / unclear+maxRetries
+    DECISION_MADE --> ENDING: not_available / callback_later
+    TRANSFERRING --> TRANSFERRED: transfer success
+    TRANSFERRED --> LOGGED: log call
+    ENDING --> ENDED: hangup success
+    ENDED --> LOGGED: log call
+    LOGGED --> [*]
+```
+
 ## Quick Start
 
 ### 1. Prerequisites
