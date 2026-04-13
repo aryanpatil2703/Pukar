@@ -20,7 +20,7 @@ export function decide(intent, retryCount = 0) {
     case Intent.AVAILABLE:
       return {
         speakText: Messages.TRANSFER_CONFIRM,
-        nextAction: NextAction.TRANSFER,
+        nextAction: NextAction.HANGUP,
         final: true,
       };
 
@@ -47,18 +47,18 @@ export function decide(intent, retryCount = 0) {
           final: false,
         };
       }
-      // Max retries reached — transfer as safety net
+      // Max retries reached — hangup as safety net
       return {
         speakText: Messages.ERROR_FALLBACK,
-        nextAction: NextAction.TRANSFER,
+        nextAction: NextAction.HANGUP,
         final: true,
       };
 
     default:
-      log.warn({ intent }, 'Unknown intent, defaulting to transfer');
+      log.warn({ intent }, 'Unknown intent, defaulting to hangup');
       return {
         speakText: Messages.ERROR_FALLBACK,
-        nextAction: NextAction.TRANSFER,
+        nextAction: NextAction.HANGUP,
         final: true,
       };
   }

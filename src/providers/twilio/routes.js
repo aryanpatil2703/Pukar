@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import twilio from 'twilio';
 import { createLogger } from '../../utils/log.js';
-import { classifyIntent } from '../../services/intent.js';
-import { decide } from '../../services/decisionEngine.js';
+import ai from '../../services/ai.js';
 import { logCall } from '../../services/logger.js';
 import redisService from '../../services/redis.js';
 import { makeOutboundCall } from './callControl.js';
@@ -39,6 +38,9 @@ router.post('/voice', async (req, res) => {
     { voice: 'Polly.Joanna', language: 'en-US' },
     Messages.INTRO
   );
+
+  // Add intro to history so AI knows what it said
+  await redisService.addMessageToHistory(callSid, 'assistant', Messages.INTRO);
 
   // Gather speech response from caller
   const gather = twiml.gather({
@@ -86,48 +88,37 @@ router.post('/handle-response', async (req, res) => {
     return res.send(twiml.toString());
   }
 
-  // Update transcript
+  // Update state
   await redisService.transitionState(callSid, CallState.PROCESSING_INTENT);
-  const existingTranscript = session.transcript || '';
-  const fullTranscript = existingTranscript
-    ? `${existingTranscript} | ${speechResult}`
-    : speechResult;
-  await redisService.updateCallSession(callSid, { transcript: fullTranscript });
+  
+  // Generate dynamic response using Conversational AI
+  const aiResult = await ai.generateResponse(callSid, speechResult);
+  
+  // FINAL SAFETY CHECK: Is the call still alive?
+  const currentSession = await redisService.getCallSession(callSid);
+  if (!currentSession || currentSession.state === CallState.ENDED || currentSession.state === CallState.LOGGED) {
+    log.warn({ callSid }, 'Call ended while AI was processing — cancelling response');
+    const emptyTwiml = new VoiceResponse();
+    res.type('text/xml');
+    return res.send(emptyTwiml.toString());
+  }
 
-  // Classify intent
-  const intent = await classifyIntent(speechResult);
-  await redisService.updateCallSession(callSid, { intent });
-  await redisService.transitionState(callSid, CallState.DECISION_MADE);
+  await redisService.transitionState(callSid, CallState.RESPONDING);
 
-  log.info({ callSid, intent, speechResult }, 'Intent classified');
+  // Store next action and build TwiML
+  await redisService.updateCallSession(callSid, {
+    nextAction: aiResult.nextAction,
+    intent: aiResult.nextAction === 'hangup' ? 'completed' : 'in-progress'
+  });
 
-  // Make decision
-  const decision = decide(intent, session.retryCount);
-  log.info({ callSid, decision }, 'Decision made');
-
-  // Build TwiML response
   const twiml = new VoiceResponse();
+  twiml.say({ voice: 'Polly.Joanna' }, aiResult.response);
 
-  if (decision.nextAction === NextAction.TRANSFER) {
-    // Transfer to human agent
-    twiml.say({ voice: 'Polly.Joanna' }, decision.speakText);
-    twiml.dial(
-      { timeout: 30, callerId: req.body.To },
-      config.transferNumber
-    );
-    await redisService.transitionState(callSid, CallState.TRANSFERRING);
-
-  } else if (decision.nextAction === NextAction.HANGUP) {
-    // End the call
-    twiml.say({ voice: 'Polly.Joanna' }, decision.speakText);
+  if (aiResult.nextAction === 'hangup') {
     twiml.hangup();
     await redisService.transitionState(callSid, CallState.ENDING);
-
-  } else if (decision.nextAction === NextAction.START_LISTENING) {
-    // Retry — ask again
-    await redisService.incrementRetry(callSid);
-    twiml.say({ voice: 'Polly.Joanna' }, decision.speakText);
-
+  } else {
+    // Continue gathering
     const gather = twiml.gather({
       input: 'speech',
       action: '/handle-response',
@@ -136,10 +127,8 @@ router.post('/handle-response', async (req, res) => {
       timeout: 15,
       language: 'en-US',
     });
-
     gather.say({ voice: 'Polly.Joanna' }, 'I\'m listening.');
     twiml.redirect('/handle-timeout');
-
     await redisService.transitionState(callSid, CallState.LISTENING);
   }
 
@@ -157,17 +146,25 @@ router.post('/handle-timeout', async (req, res) => {
   const session = await redisService.getCallSession(callSid);
   const retryCount = session?.retryCount || 0;
 
+  // Treat timeout as silenceTurn in the conversation
+  const aiResult = await ai.generateResponse(callSid, '(Silence)');
+
+  // FINAL SAFETY CHECK: Is the call still alive?
+  const currentSession = await redisService.getCallSession(callSid);
+  if (!currentSession || currentSession.state === CallState.ENDED || currentSession.state === CallState.LOGGED) {
+    log.warn({ callSid }, 'Call ended during timeout processing — cancelling response');
+    const emptyTwiml = new VoiceResponse();
+    res.type('text/xml');
+    return res.send(emptyTwiml.toString());
+  }
+
   const twiml = new VoiceResponse();
+  twiml.say({ voice: 'Polly.Joanna' }, aiResult.response);
 
-  if (retryCount < 1) {
-    // Retry once
-    if (session) await redisService.incrementRetry(callSid);
-
-    twiml.say(
-      { voice: 'Polly.Joanna' },
-      Messages.CLARIFY
-    );
-
+  if (aiResult.nextAction === 'hangup') {
+    twiml.hangup();
+    if (session) await redisService.transitionState(callSid, CallState.ENDING);
+  } else {
     const gather = twiml.gather({
       input: 'speech',
       action: '/handle-response',
@@ -176,21 +173,9 @@ router.post('/handle-timeout', async (req, res) => {
       timeout: 15,
       language: 'en-US',
     });
-
     gather.say({ voice: 'Polly.Joanna' }, 'I\'m listening.');
     twiml.redirect('/handle-timeout');
-  } else {
-    // Max retries — transfer to human
-    twiml.say({ voice: 'Polly.Joanna' }, Messages.TIMEOUT);
-    twiml.dial(
-      { timeout: 30, callerId: req.body.To },
-      config.transferNumber
-    );
-
-    if (session) {
-      await redisService.updateCallSession(callSid, { intent: Intent.UNCLEAR });
-      await redisService.transitionState(callSid, CallState.TRANSFERRING);
-    }
+    if (session) await redisService.transitionState(callSid, CallState.LISTENING);
   }
 
   res.type('text/xml');

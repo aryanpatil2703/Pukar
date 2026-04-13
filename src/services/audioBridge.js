@@ -87,6 +87,12 @@ export function initAudioBridge(server) {
           case 'media':
             // Forward audio payload to Deepgram
             if (callControlId && message.media?.payload) {
+              log.debug({
+                callControlId,
+                size: message.media.payload.length,
+                hasPayload: !!message.media.payload
+              }, 'Incoming audio packet');
+              
               const audioBuffer = Buffer.from(message.media.payload, 'base64');
               stt.sendAudio(callControlId, audioBuffer);
             }

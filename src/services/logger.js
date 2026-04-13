@@ -48,4 +48,33 @@ export async function logCall(callData) {
   }
 }
 
-export default { logCall };
+/**
+ * Fetch aggregate call statistics.
+ */
+export async function getStats() {
+  try {
+    const result = await pool.query('SELECT * FROM call_stats');
+    return result.rows[0];
+  } catch (err) {
+    log.error({ err }, 'Failed to fetch call stats');
+    throw err;
+  }
+}
+
+/**
+ * Fetch call history logs.
+ */
+export async function getCallLogs(limit = 50, offset = 0) {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM call_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+    return result.rows;
+  } catch (err) {
+    log.error({ err }, 'Failed to fetch call logs');
+    throw err;
+  }
+}
+
+export default { logCall, getStats, getCallLogs };

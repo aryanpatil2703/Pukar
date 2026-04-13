@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "migrate": "node scripts/migrate.js"
+    "migrate": "node scripts/migrate.js",
+    "frontend:install": "cd frontend && npm install",
+    "frontend:build": "cd frontend && npm run build"
   },
   "dependencies": {
     "@deepgram/sdk": "^3.9.0",

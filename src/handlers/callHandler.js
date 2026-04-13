@@ -2,10 +2,8 @@ import { createLogger } from '../utils/log.js';
 import { CallState, NextAction, Timeouts, Messages, TelnyxEvent } from '../utils/constants.js';
 import redisService from '../services/redis.js';
 import callControl from '../services/callControl.js';
-import { classifyIntent } from '../services/intent.js';
-import { decide } from '../services/decisionEngine.js';
+import ai from '../services/ai.js';
 import { logCall } from '../services/logger.js';
-import audioBridge from '../services/audioBridge.js';
 import config from '../config/index.js';
 
 const log = createLogger('callHandler');
@@ -16,12 +14,9 @@ const log = createLogger('callHandler');
 const responseTimers = new Map();
 
 // ============================================
-// Initialize — Register audio bridge callbacks
+// Initialize
 // ============================================
 export function initCallHandler() {
-  // When the audio bridge receives a finished transcript
-  audioBridge.onTranscript(handleTranscript);
-  audioBridge.onSilence(handleSilenceTimeout);
   log.info('Call handler initialized');
 }
 
@@ -55,11 +50,12 @@ export async function handleWebhookEvent(event) {
         break;
 
       case TelnyxEvent.STREAMING_STARTED:
-        log.info({ callControlId }, 'Audio streaming confirmed');
+      case TelnyxEvent.STREAMING_STOPPED:
+        // Ignore streaming events as we now use native transcription
         break;
 
-      case TelnyxEvent.STREAMING_STOPPED:
-        log.info({ callControlId }, 'Audio streaming stopped');
+      case TelnyxEvent.TRANSCRIPTION:
+        await handleTranscriptionPayload(callControlId, payload);
         break;
 
       case TelnyxEvent.CALL_HANGUP:
@@ -131,6 +127,9 @@ async function handleCallAnswered(callControlId, payload) {
 
   // Speak the intro
   await callControl.speak(callControlId, Messages.INTRO);
+
+  // Add intro to history so AI knows what it said
+  await redisService.addMessageToHistory(callControlId, 'assistant', Messages.INTRO);
 }
 
 /**
@@ -207,7 +206,6 @@ async function handleCallHangup(callControlId, payload) {
   await redisService.transitionState(callControlId, CallState.LOGGED);
 
   // Cleanup
-  audioBridge.cleanupCall(callControlId);
   await redisService.deleteCallSession(callControlId);
   log.info({ callControlId, outcome }, 'Call fully processed and cleaned up');
 }
@@ -218,73 +216,97 @@ async function handleCallHangup(callControlId, payload) {
 
 /**
  * Start listening for caller response.
- * Begins audio streaming and sets response timeout.
+ * Begins native Telnyx transcription and sets response timeout.
  */
 async function startListening(callControlId) {
   await redisService.transitionState(callControlId, CallState.LISTENING);
 
-  // Build the WebSocket URL for Telnyx to stream audio to
-  // This will be the public URL (ngrok in dev) + ws path
-  const wsUrl = buildStreamUrl();
+  await callControl.startTranscription(callControlId);
 
-  await callControl.startStreaming(callControlId, wsUrl);
+  // Store start time for latency tracking
+  await redisService.updateCallSession(callControlId, {
+    listeningStartTime: Date.now()
+  });
 
   // Set response timeout
   setResponseTimer(callControlId);
-  log.info({ callControlId, timeout: Timeouts.RESPONSE_TIMEOUT }, 'Listening for response');
+  log.info({ callControlId, timeout: Timeouts.RESPONSE_TIMEOUT }, 'Listening for response via Telnyx STT');
+}
+
+/**
+ * Handle native transcription webhook payloads.
+ */
+async function handleTranscriptionPayload(callControlId, payload) {
+  const data = payload.transcription_data;
+  if (!data) return;
+  
+  if (data.is_final) {
+    const text = data.transcript || '';
+    await handleTranscript(callControlId, text);
+  }
 }
 
 /**
  * Handle transcript received from STT.
  */
 async function handleTranscript(callControlId, text) {
-  log.info({ callControlId, text }, 'Transcript received');
+  const processStart = process.hrtime.bigint();
+  const session = await redisService.getCallSession(callControlId);
+  
+  // Calculate STT Latency (Edge-to-Brain)
+  const sttLatency = session?.listeningStartTime ? (Date.now() - session.listeningStartTime) : 0;
+  
+  log.info({ callControlId, text, sttLatency: `${sttLatency}ms` }, 'Transcript received');
 
   clearResponseTimer(callControlId);
 
-  const session = await redisService.getCallSession(callControlId);
-  if (!session || session.state !== CallState.LISTENING) {
-    log.warn({ callControlId, state: session?.state }, 'Transcript received in wrong state');
-    return;
-  }
-
-  // Stop streaming since we got the response
-  try {
-    await callControl.stopStreaming(callControlId);
-  } catch (err) {
-    log.warn({ callControlId, err: err.message }, 'Failed to stop streaming (non-critical)');
+  // Stop transcription immediately to focus on processing
+  if (session && session.state === CallState.LISTENING) {
+    try {
+      await callControl.stopTranscription(callControlId);
+    } catch (err) { /* non-critical */ }
   }
 
   await redisService.transitionState(callControlId, CallState.PROCESSING_INTENT);
 
-  // Store transcript
-  const existingTranscript = session.transcript || '';
-  const fullTranscript = existingTranscript ? `${existingTranscript} | ${text}` : text;
-  await redisService.updateCallSession(callControlId, { transcript: fullTranscript });
-
-  // Classify intent
-  const intent = await classifyIntent(text);
-  await redisService.updateCallSession(callControlId, { intent });
-  await redisService.transitionState(callControlId, CallState.DECISION_MADE);
-
-  log.info({ callControlId, intent, text }, 'Intent classified');
-
-  // Make decision
-  const decision = decide(intent, session.retryCount);
-  log.info({ callControlId, decision }, 'Decision made');
-
-  // If retrying, increment retry count
-  if (!decision.final) {
-    await redisService.incrementRetry(callControlId);
+  // Generate dynamic response using Conversational AI
+  const aiStart = process.hrtime.bigint();
+  const aiResult = await ai.generateResponse(callControlId, text || '(Silence)');
+  const aiEnd = process.hrtime.bigint();
+  const llmLatency = Number(aiEnd - aiStart) / 1_000_000;
+  
+  // FINAL SAFETY CHECK: Is the call still alive after the AI finished thinking?
+  const currentSession = await redisService.getCallSession(callControlId);
+  if (!currentSession || currentSession.state === CallState.ENDED || currentSession.state === CallState.LOGGED) {
+    log.warn({ callControlId }, 'Call ended while AI was processing — cancelling response');
+    return;
   }
 
-  // Store next action and speak the response
   await redisService.transitionState(callControlId, CallState.RESPONDING);
+  
+  // Map AI action to system action
+  const nextAction = aiResult.nextAction === 'listen' 
+    ? NextAction.START_LISTENING 
+    : aiResult.nextAction;
+
+  // Store next action and speak the response
   await redisService.updateCallSession(callControlId, {
-    nextAction: decision.nextAction,
+    nextAction: nextAction,
   });
 
-  await callControl.speak(callControlId, decision.speakText);
+  await callControl.speak(callControlId, aiResult.response);
+
+  const processEnd = process.hrtime.bigint();
+  const totalTurnaround = Number(processEnd - processStart) / 1_000_000;
+
+  log.info({
+    callControlId,
+    metrics: {
+      stt_latency: `${sttLatency}ms`,
+      llm_latency: `${llmLatency.toFixed(2)}ms`,
+      total_processing: `${totalTurnaround.toFixed(2)}ms`
+    }
+  }, 'Turn completed');
 }
 
 /**
@@ -337,9 +359,9 @@ function setResponseTimer(callControlId) {
 
     const session = await redisService.getCallSession(callControlId);
     if (session && session.state === CallState.LISTENING) {
-      // Stop streaming
+      // Stop transcription
       try {
-        await callControl.stopStreaming(callControlId);
+        await callControl.stopTranscription(callControlId);
       } catch (e) { /* ignore */ }
 
       // Treat timeout as unclear
@@ -385,9 +407,9 @@ async function handleError(callControlId, err) {
     // Try to speak error message and transfer
     try {
       await callControl.speak(callControlId, Messages.ERROR_FALLBACK);
-      // The speak.ended handler will transfer
+      // The speak.ended handler will hangup
       await redisService.updateCallSession(callControlId, {
-        nextAction: NextAction.TRANSFER,
+        nextAction: NextAction.HANGUP,
       });
     } catch (speakErr) {
       // If even speaking fails, just try to hangup
@@ -403,27 +425,6 @@ async function handleError(callControlId, err) {
 
   // Clean up
   clearResponseTimer(callControlId);
-  audioBridge.cleanupCall(callControlId);
-}
-
-// ============================================
-// Utility
-// ============================================
-
-/**
- * Build the WebSocket stream URL.
- * Uses STREAM_URL env var if set, otherwise constructs from ngrok.
- */
-function buildStreamUrl() {
-  if (process.env.STREAM_URL) {
-    return process.env.STREAM_URL;
-  }
-
-  // Default: assume ngrok is tunneling the same port
-  // User must set STREAM_URL in .env for production
-  const host = process.env.NGROK_URL || `localhost:${config.port}`;
-  const protocol = host.includes('localhost') ? 'ws' : 'wss';
-  return `${protocol}://${host}${config.wsPath}`;
 }
 
 export default {

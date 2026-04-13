@@ -65,31 +65,34 @@ export async function speak(callControlId, text) {
 }
 
 /**
- * Start media streaming (audio fork) to our WebSocket server.
+ * Start native Telnyx transcription.
  */
-export async function startStreaming(callControlId, streamUrl) {
-  log.info({ callControlId, streamUrl }, 'Starting audio stream');
-  return telnyxRequest('post', `/calls/${callControlId}/actions/streaming_start`, {
-    stream_url: streamUrl,
-    stream_track: 'inbound_track',
+export async function startTranscription(callControlId) {
+  log.info({ callControlId }, 'Starting Telnyx native transcription (Deepgram Flux)');
+  return telnyxRequest('post', `/calls/${callControlId}/actions/transcription_start`, {
+    language: 'en',
+    transcription_engine: 'Deepgram',
+    transcription_model: 'flux',
+    transcription_tracks: 'inbound'
   });
 }
 
 /**
- * Stop media streaming.
+ * Stop native Telnyx transcription.
  */
-export async function stopStreaming(callControlId) {
-  log.info({ callControlId }, 'Stopping audio stream');
-  return telnyxRequest('post', `/calls/${callControlId}/actions/streaming_stop`, {});
+export async function stopTranscription(callControlId) {
+  log.info({ callControlId }, 'Stopping Telnyx native transcription');
+  return telnyxRequest('post', `/calls/${callControlId}/actions/transcription_stop`, {});
 }
 
 /**
  * Transfer call to the target number.
  */
-export async function transferCall(callControlId, toNumber = config.transferNumber) {
-  log.info({ callControlId, to: toNumber }, 'Transferring call');
+export async function transferCall(callControlId, toNumber = config.transferNumber, fromNumber = config.telnyxPhoneNumber) {
+  log.info({ callControlId, to: toNumber, from: fromNumber }, 'Transferring call');
   return telnyxRequest('post', `/calls/${callControlId}/actions/transfer`, {
     to: toNumber,
+    from: fromNumber
   });
 }
 
@@ -117,8 +120,8 @@ export async function dialOutbound(toNumber, fromNumber, connectionId = config.t
 export default {
   answerCall,
   speak,
-  startStreaming,
-  stopStreaming,
+  startTranscription,
+  stopTranscription,
   transferCall,
   hangupCall,
   dialOutbound,

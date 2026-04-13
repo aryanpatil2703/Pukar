@@ -26,6 +26,7 @@ redis.on('error', (err) => log.error({ err }, 'Redis error'));
 // ============================================
 
 const keyFor = (callId) => `call:${callId}`;
+const historyKeyFor = (callId) => `call:${callId}:history`;
 
 /**
  * Create a new call session in Redis.
@@ -50,6 +51,29 @@ export async function createCallSession(callId, metadata = {}) {
   await redis.expire(key, Timeouts.CALL_SESSION_TTL);
   log.info({ callId, state: CallState.INIT }, 'Call session created');
   return session;
+}
+
+/**
+ * Append a message to the call's conversation history.
+ */
+export async function addMessageToHistory(callId, role, content) {
+  const key = historyKeyFor(callId);
+  const message = `${role}:${content}`;
+  await redis.rpush(key, message);
+  await redis.expire(key, Timeouts.CALL_SESSION_TTL);
+}
+
+/**
+ * Retrieve the full conversation history for a call.
+ */
+export async function getHistory(callId) {
+  const key = historyKeyFor(callId);
+  const raw = await redis.lrange(key, 0, -1);
+  
+  return raw.map(msg => {
+    const [role, ...contentParts] = msg.split(':');
+    return { role, content: contentParts.join(':') };
+  });
 }
 
 /**
@@ -104,8 +128,8 @@ export async function incrementRetry(callId) {
  * Delete a call session (cleanup after logging).
  */
 export async function deleteCallSession(callId) {
-  await redis.del(keyFor(callId));
-  log.info({ callId }, 'Call session deleted');
+  await redis.del(keyFor(callId), historyKeyFor(callId));
+  log.info({ callId }, 'Call session and history deleted');
 }
 
 /**
@@ -125,6 +149,8 @@ export async function testConnection() {
 export { redis as redisClient };
 export default {
   createCallSession,
+  addMessageToHistory,
+  getHistory,
   getCallSession,
   updateCallSession,
   getCallState,

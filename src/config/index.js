@@ -35,14 +35,14 @@ const config = Object.freeze({
   publicUrl: process.env.PUBLIC_URL || '',
 
   // Telnyx
-  telnyxApiKey:       process.env.TELNYX_API_KEY || '',
-  telnyxPublicKey:    process.env.TELNYX_PUBLIC_KEY || '',
+  telnyxApiKey: process.env.TELNYX_API_KEY || '',
+  telnyxPublicKey: process.env.TELNYX_PUBLIC_KEY || '',
   telnyxConnectionId: process.env.TELNYX_CONNECTION_ID || '',
-  telnyxPhoneNumber:  process.env.TELNYX_PHONE_NUMBER || '',
+  telnyxPhoneNumber: process.env.TELNYX_PHONE_NUMBER || '',
 
   // Twilio
-  twilioAccountSid:  process.env.TWILIO_ACCOUNT_SID || '',
-  twilioAuthToken:   process.env.TWILIO_AUTH_TOKEN || '',
+  twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || '',
+  twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || '',
   twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER || '',
 
   // Deepgram
@@ -59,7 +59,7 @@ const config = Object.freeze({
 
   // Call Config
   transferNumber: process.env.TRANSFER_NUMBER,
-  companyName:    process.env.COMPANY_NAME || 'Salesgarners',
+  companyName: process.env.COMPANY_NAME || 'SG',
 
   // WebSocket
   wsPath: process.env.WS_PATH || '/audio',

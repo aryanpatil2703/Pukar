@@ -68,12 +68,12 @@ function classifyRuleBased(text) {
 // ============================================
 // Groq LLM Classification (Tier 2 — Fallback)
 // ============================================
-const SYSTEM_PROMPT = `You are a phone call intent classifier for Salesgarners.
+const SYSTEM_PROMPT = `You are a phone call intent classifier for SG.
 
-The caller was asked: "Are you a team member or a client of Salesgarners?"
+The caller was asked: "Are you a team member or a client of SG?"
 
 Classify the caller's response into exactly ONE of these intents:
-- "available": The caller confirmed they are associated with Salesgarners (employee, client, or willing to talk)
+- "available": The caller confirmed they are associated with SG (employee, client, or willing to talk)
 - "not_available": The caller denied association, said wrong number, or is busy
 - "callback_later": The caller asked to be called back at another time
 - "unclear": The response is too ambiguous to classify

@@ -1,4 +1,4 @@
-# 🤖 AI Voice Call Agent — Salesgarners
+# 🤖 AI Voice Call Agent — SGgarners
 
 A **production-ready AI Voice Call Agent** that handles real-time phone calls via **Telnyx**, classifies caller intent using **Deepgram STT** + **Groq LLM**, and routes calls intelligently.
 
