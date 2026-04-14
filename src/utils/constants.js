@@ -69,9 +69,9 @@ export const MAX_RETRIES = 1;
 // TTS Messages
 // ============================================
 export const Messages = Object.freeze({
-  INTRO: `Hi, this is the SGgarners assistant. I'm reaching out to quickly confirm your association with SGgarners. Are you a team member or a client of SGgarners? Please let me know.`,
+  INTRO: `Hi, this is the Microsoft AI assistant. I'm reaching out to quickly confirm your association with Microsoft. Are you a team member or a client of Microsoft? Please let me know.`,
 
-  CLARIFY: `I'm sorry, I didn't quite catch that. Could you please let me know if you're associated with SGgarners, either as a team member or a client?`,
+  CLARIFY: `I'm sorry, I didn't quite catch that. Could you please let me know if you're associated with Microsoft, either as a team member or a client?`,
 
   TRANSFER_CONFIRM: `Thank you for confirming your association. We have successfully logged your response. Have a great day. Goodbye.`,
 

@@ -73,7 +73,11 @@ export async function startTranscription(callControlId) {
     language: 'en',
     transcription_engine: 'Deepgram',
     transcription_model: 'flux',
-    transcription_tracks: 'inbound'
+    transcription_tracks: 'inbound',
+    transcription_settings: {
+      eot_threshold: 0.6,
+      eot_timeout_ms: 1500
+    }
   });
 }
 

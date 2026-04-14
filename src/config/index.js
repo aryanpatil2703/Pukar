@@ -59,7 +59,7 @@ const config = Object.freeze({
 
   // Call Config
   transferNumber: process.env.TRANSFER_NUMBER,
-  companyName: process.env.COMPANY_NAME || 'SG',
+  companyName: process.env.COMPANY_NAME || 'Microsoft',
 
   // WebSocket
   wsPath: process.env.WS_PATH || '/audio',

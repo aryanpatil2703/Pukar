@@ -60,7 +60,7 @@ const CallHistory = () => {
               <th>TO_NUMBER</th>
               <th>INTENT_TAG</th>
               <th>OUTCOME_STATUS</th>
-              <th>TIME_MS</th>
+              <th>TIME_S</th>
               <th>STAMP</th>
               <th></th>
             </tr>
@@ -77,7 +77,7 @@ const CallHistory = () => {
                   {call.intent ? call.intent.toUpperCase() : 'NO_INTENT'}
                 </td>
                 <td>{getStatusBadge(call.outcome)}</td>
-                <td style={{ fontFamily: 'monospace' }}>{Math.round(call.duration_ms)}MS</td>
+                <td style={{ fontFamily: 'monospace' }}>{Math.round(call.duration_s)}S</td>
                 <td style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
                   {new Intl.DateTimeFormat('en-GB', {
                     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'

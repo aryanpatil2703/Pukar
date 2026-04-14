@@ -6,7 +6,7 @@ async function test() {
   console.log('--- STARTING AI SYSTEM TEST ---');
   try {
     const callId = 'test-suit-' + Date.now();
-    
+
     // Test 1: Cross-question handling
     console.log('\n[TEST 1] Testing Cross-Question (Who are you?)');
     const r1 = await ai.generateResponse(callId, 'Wait, who am I speaking with?');
@@ -21,8 +21,8 @@ async function test() {
 
     // Test 3: Intent confirmation
     console.log('\n[TEST 3] Testing Intent Confirmation');
-    const r3 = await ai.generateResponse(callId, 'Yes, I am a client of SG.');
-    console.log('User: "Yes, I am a client of SG."');
+    const r3 = await ai.generateResponse(callId, 'Yes, I am a client of Microsoft.');
+    console.log('User: "Yes, I am a client of Microsoft."');
     console.log('AI:', r3.response);
     console.log('Next Action:', r3.nextAction);
 

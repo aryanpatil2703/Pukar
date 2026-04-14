@@ -260,14 +260,12 @@ async function handleTranscript(callControlId, text) {
 
   clearResponseTimer(callControlId);
 
-  // Stop transcription immediately to focus on processing
-  if (session && session.state === CallState.LISTENING) {
-    try {
-      await callControl.stopTranscription(callControlId);
-    } catch (err) { /* non-critical */ }
-  }
-
-  await redisService.transitionState(callControlId, CallState.PROCESSING_INTENT);
+  // OPTIMIZATION: Start stopTranscription and state transition in background
+  // to prioritize start of AI generation.
+  Promise.all([
+    callControl.stopTranscription(callControlId).catch(() => {}),
+    redisService.transitionState(callControlId, CallState.PROCESSING_INTENT).catch(() => {})
+  ]);
 
   // Generate dynamic response using Conversational AI
   const aiStart = process.hrtime.bigint();
@@ -276,21 +274,29 @@ async function handleTranscript(callControlId, text) {
   const llmLatency = Number(aiEnd - aiStart) / 1_000_000;
   
   // FINAL SAFETY CHECK: Is the call still alive after the AI finished thinking?
-  const currentSession = await redisService.getCallSession(callControlId);
+  const [currentSession] = await Promise.all([
+    redisService.getCallSession(callControlId),
+    redisService.transitionState(callControlId, CallState.RESPONDING).catch(() => {})
+  ]);
+
   if (!currentSession || currentSession.state === CallState.ENDED || currentSession.state === CallState.LOGGED) {
     log.warn({ callControlId }, 'Call ended while AI was processing — cancelling response');
     return;
   }
 
-  await redisService.transitionState(callControlId, CallState.RESPONDING);
-  
-  // Map AI action to system action
+  // Determine next action
   const nextAction = aiResult.nextAction === 'listen' 
     ? NextAction.START_LISTENING 
     : aiResult.nextAction;
 
-  // Store next action and speak the response
+  // Update session with new intent and accumulated transcript
+  const updatedTranscript = session.transcript 
+    ? `${session.transcript}\nUser: ${text}` 
+    : `User: ${text}`;
+
   await redisService.updateCallSession(callControlId, {
+    intent: aiResult.intent || session.intent,
+    transcript: updatedTranscript,
     nextAction: nextAction,
   });
 

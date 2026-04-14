@@ -47,7 +47,8 @@ router.post('/voice', async (req, res) => {
     input: 'speech',
     action: '/handle-response',
     method: 'POST',
-    speechTimeout: '5',
+    speechTimeout: 'auto',
+    enhanced: true,
     timeout: 15,
     language: 'en-US',
   });
@@ -88,14 +89,25 @@ router.post('/handle-response', async (req, res) => {
     return res.send(twiml.toString());
   }
 
-  // Update state
-  await redisService.transitionState(callSid, CallState.PROCESSING_INTENT);
+  // OPTIMIZATION: Start state transition and transcript update in background
+  const updatedTranscript = session.transcript 
+    ? `${session.transcript}\nUser: ${speechResult}` 
+    : `User: ${speechResult}`;
+
+  Promise.all([
+    redisService.transitionState(callSid, CallState.PROCESSING_INTENT).catch(() => {}),
+    redisService.updateCallSession(callSid, { transcript: updatedTranscript }).catch(() => {})
+  ]);
   
   // Generate dynamic response using Conversational AI
   const aiResult = await ai.generateResponse(callSid, speechResult);
   
   // FINAL SAFETY CHECK: Is the call still alive?
-  const currentSession = await redisService.getCallSession(callSid);
+  const [currentSession] = await Promise.all([
+    redisService.getCallSession(callSid),
+    redisService.transitionState(callSid, CallState.RESPONDING).catch(() => {})
+  ]);
+
   if (!currentSession || currentSession.state === CallState.ENDED || currentSession.state === CallState.LOGGED) {
     log.warn({ callSid }, 'Call ended while AI was processing — cancelling response');
     const emptyTwiml = new VoiceResponse();
@@ -103,12 +115,10 @@ router.post('/handle-response', async (req, res) => {
     return res.send(emptyTwiml.toString());
   }
 
-  await redisService.transitionState(callSid, CallState.RESPONDING);
-
   // Store next action and build TwiML
   await redisService.updateCallSession(callSid, {
     nextAction: aiResult.nextAction,
-    intent: aiResult.nextAction === 'hangup' ? 'completed' : 'in-progress'
+    intent: aiResult.intent || session.intent,
   });
 
   const twiml = new VoiceResponse();
@@ -123,11 +133,11 @@ router.post('/handle-response', async (req, res) => {
       input: 'speech',
       action: '/handle-response',
       method: 'POST',
-      speechTimeout: '5',
+      speechTimeout: 'auto',
+      enhanced: true,
       timeout: 15,
       language: 'en-US',
     });
-    gather.say({ voice: 'Polly.Joanna' }, 'I\'m listening.');
     twiml.redirect('/handle-timeout');
     await redisService.transitionState(callSid, CallState.LISTENING);
   }
@@ -169,11 +179,11 @@ router.post('/handle-timeout', async (req, res) => {
       input: 'speech',
       action: '/handle-response',
       method: 'POST',
-      speechTimeout: '5',
+      speechTimeout: 'auto',
+      enhanced: true,
       timeout: 15,
       language: 'en-US',
     });
-    gather.say({ voice: 'Polly.Joanna' }, 'I\'m listening.');
     twiml.redirect('/handle-timeout');
     if (session) await redisService.transitionState(callSid, CallState.LISTENING);
   }
